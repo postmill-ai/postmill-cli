@@ -154,10 +154,12 @@ pnpm build       # tsup → dist/cli.js
 ## Releasing (maintainers)
 
 Releases are tag-driven: push a `cli-vX.Y.Z` tag whose version matches `package.json`, and
-`.github/workflows/publish.yml` typechecks, tests, builds, and publishes to npm with provenance via
-**OIDC trusted publishing** (no npm token secret), then creates the GitHub Release.
+`.github/workflows/publish.yml` typechecks, tests, builds, and publishes to **npm** (with
+provenance via **OIDC trusted publishing** — no npm token secret) and to **GitHub Packages**
+(via the workflow's `GITHUB_TOKEN`), then creates the GitHub Release. Each registry step skips
+itself when the version is already published, so re-runs after a partial failure are safe.
 
-One-time manual step: a maintainer must configure the **Trusted Publisher** for
+One-time manual step (done for 0.1.0): a maintainer must configure the **Trusted Publisher** for
 `@postmill-ai/postmill-cli` on npmjs.com (package settings → Trusted Publisher → GitHub Actions,
 naming this repo and the `publish.yml` workflow filename). Without it the npm publish step fails.
 

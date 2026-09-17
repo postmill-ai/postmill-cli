@@ -5,6 +5,10 @@
   "type": "module",
   "license": "AGPL-3.0",
   "packageManager": "pnpm@11.2.2",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/postmill-ai/postmill-cli.git"
+  },
   "bin": {
     "postmill": "dist/cli.js"
   },

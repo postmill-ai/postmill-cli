@@ -1,13 +1,14 @@
 name: Publish CLI
 
-# Publishes @postmill-ai/postmill-cli to npm and creates a `cli-vX.Y.Z` GitHub Release.
-# The CLI versions independently of the app release (see the app repo's AGENTS.md § Version),
-# so it has its own tag format, mirroring the app's publish-sdk.yml.
+# Publishes @postmill-ai/postmill-cli to npm and GitHub Packages, and creates a
+# `cli-vX.Y.Z` GitHub Release with the tarball attached. The CLI versions independently
+# of the app release (see the app repo's AGENTS.md § Version), so it has its own tag
+# format, mirroring the app's publish-sdk.yml.
 #
 # npm auth is OIDC trusted publishing — no NPM_TOKEN secret. The package's Trusted Publisher
 # on npmjs.com must name this repo and this workflow filename (one-time maintainer setup, see
 # README § Releasing). Publishing uses the npm CLI (not pnpm) because trusted publishing is an
-# npm-CLI feature.
+# npm-CLI feature. The GitHub Packages mirror uses the workflow's GITHUB_TOKEN.
 on:
   push:
     tags:
@@ -26,6 +27,7 @@ jobs:
     permissions:
       contents: write   # gh release create
       id-token: write   # npm OIDC trusted publishing + provenance
+      packages: write   # GitHub Packages mirror
     env:
       PKG: '@postmill-ai/postmill-cli'
       DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '--dry-run' || '' }}
@@ -41,9 +43,8 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
 
       # The tag is the release contract; package.json is the canonical version.
-      # Refuse when they disagree. A version npm already has is an error on a fresh run
-      # (forgot to bump) but expected on a re-run after a partial failure — then the npm
-      # step is skipped so the remaining steps can finish.
+      # Refuse when they disagree. Each registry step below skips itself when the
+      # version is already published there, so re-runs and the mirror stay idempotent.
       - name: Resolve and gate the version
         run: |
           VER=$(node -p "require('./package.json').version")
@@ -51,15 +52,6 @@ jobs:
             TAG="${GITHUB_REF_NAME#cli-v}"
             if [ "$TAG" != "$VER" ]; then
               echo "::error::Tag '${GITHUB_REF_NAME}' does not match package.json ('$VER'). Bump the package version before tagging, or fix the tag."
-              exit 1
-            fi
-          fi
-          if [ -n "$(npm view "${PKG}@${VER}" version 2>/dev/null)" ]; then
-            if [ "${{ github.run_attempt }}" -gt 1 ]; then
-              echo "::warning::${PKG}@${VER} is already on npm (re-run); skipping the npm publish."
-              echo "SKIP_NPM=1" >> "$GITHUB_ENV"
-            else
-              echo "::error::${PKG}@${VER} is already on npm. Bump package.json."
               exit 1
             fi
           fi
@@ -76,11 +68,27 @@ jobs:
         run: pnpm build
 
       - name: Publish to npm (OIDC, with provenance)
-        if: env.SKIP_NPM != '1'
         run: |
+          if [ -n "$(npm view "${PKG}@${VER}" version 2>/dev/null)" ]; then
+            echo "::warning::${PKG}@${VER} is already on npm; skipping."
+            exit 0
+          fi
           npm install -g npm@latest   # trusted publishing needs npm >= 11.5.1
           npm --version
           npm publish --access public --provenance ${DRY_RUN}
+
+      # Mirror to GitHub Packages, mirroring the app's publish-sdk.yml. Uses the
+      # workflow's GITHUB_TOKEN; GPR ignores --access and does not support provenance.
+      - name: Publish to GitHub Packages (mirror)
+        env:
+          NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/gh-packages.npmrc
+        run: |
+          echo "//npm.pkg.github.com/:_authToken=${{ github.token }}" > "$NPM_CONFIG_USERCONFIG"
+          if [ -n "$(npm view "${PKG}@${VER}" version --registry https://npm.pkg.github.com 2>/dev/null)" ]; then
+            echo "::warning::${PKG}@${VER} is already on GitHub Packages; skipping."
+            exit 0
+          fi
+          npm publish --registry https://npm.pkg.github.com ${DRY_RUN}
 
       - name: Pack tarball
         run: |
