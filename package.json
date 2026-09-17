@@ -1,0 +1,31 @@
+{
+  "name": "@postmill-ai/postmill-cli",
+  "version": "0.1.0",
+  "description": "Official command-line interface for the Postmill platform",
+  "type": "module",
+  "license": "AGPL-3.0",
+  "bin": {
+    "postmill": "dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsup --watch",
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "commander": "^14.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vitest": "^3.0.0"
+  }
+}

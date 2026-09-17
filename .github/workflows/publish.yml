@@ -1,0 +1,108 @@
+name: Publish CLI
+
+# Publishes @postmill-ai/postmill-cli to npm and creates a `cli-vX.Y.Z` GitHub Release.
+# The CLI versions independently of the app release (see the app repo's AGENTS.md § Version),
+# so it has its own tag format, mirroring the app's publish-sdk.yml.
+#
+# npm auth is OIDC trusted publishing — no NPM_TOKEN secret. The package's Trusted Publisher
+# on npmjs.com must name this repo and this workflow filename (one-time maintainer setup, see
+# README § Releasing). Publishing uses the npm CLI (not pnpm) because trusted publishing is an
+# npm-CLI feature.
+on:
+  push:
+    tags:
+      - 'cli-v[0-9]*.[0-9]*.[0-9]*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Run everything with `npm publish --dry-run` and skip the release'
+        type: boolean
+        default: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write   # gh release create
+      id-token: write   # npm OIDC trusted publishing + provenance
+    env:
+      PKG: '@postmill-ai/postmill-cli'
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '--dry-run' || '' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+          registry-url: 'https://registry.npmjs.org'
+
+      # The tag is the release contract; package.json is the canonical version.
+      # Refuse when they disagree. A version npm already has is an error on a fresh run
+      # (forgot to bump) but expected on a re-run after a partial failure — then the npm
+      # step is skipped so the remaining steps can finish.
+      - name: Resolve and gate the version
+        run: |
+          VER=$(node -p "require('./package.json').version")
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            TAG="${GITHUB_REF_NAME#cli-v}"
+            if [ "$TAG" != "$VER" ]; then
+              echo "::error::Tag '${GITHUB_REF_NAME}' does not match package.json ('$VER'). Bump the package version before tagging, or fix the tag."
+              exit 1
+            fi
+          fi
+          if [ -n "$(npm view "${PKG}@${VER}" version 2>/dev/null)" ]; then
+            if [ "${{ github.run_attempt }}" -gt 1 ]; then
+              echo "::warning::${PKG}@${VER} is already on npm (re-run); skipping the npm publish."
+              echo "SKIP_NPM=1" >> "$GITHUB_ENV"
+            else
+              echo "::error::${PKG}@${VER} is already on npm. Bump package.json."
+              exit 1
+            fi
+          fi
+          echo "VER=$VER" >> "$GITHUB_ENV"
+          echo "OK: publishing ${PKG}@${VER} ${DRY_RUN:+(dry run)}"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+      - name: Publish to npm (OIDC, with provenance)
+        if: env.SKIP_NPM != '1'
+        run: |
+          npm install -g npm@latest   # trusted publishing needs npm >= 11.5.1
+          npm --version
+          npm publish --access public --provenance ${DRY_RUN}
+
+      - name: Pack tarball
+        run: |
+          npm pack
+          ls -la ./*.tgz
+
+      - name: Create GitHub Release
+        if: env.DRY_RUN == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="cli-v${VER}"
+          gh release view "$TAG" >/dev/null 2>&1 \
+            || gh release create "$TAG" --verify-tag --title "CLI v${VER}" --notes "$(cat <<EOF
+          \`@postmill-ai/postmill-cli\` v${VER} — https://www.npmjs.com/package/@postmill-ai/postmill-cli/v/${VER}
+
+          \`\`\`
+          npm install -g @postmill-ai/postmill-cli@${VER}
+          \`\`\`
+
+          Changelog: CHANGELOG.md
+          EOF
+          )"
+          gh release upload "$TAG" ./*.tgz --clobber
+          gh release view "$TAG"
